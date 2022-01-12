@@ -1,0 +1,291 @@
+---
+- name: Create VM
+  hosts: localhost
+  connection: local
+  gather_facts: no
+
+  vars_files:
+    - ["./vars.yml"]
+
+  tasks:
+   - name: Loading secrets
+     include_vars:
+       dir: ./
+       files_matching: secrets.yml
+
+   - name: Checking Center folder (creates the folder if doesnt exists)
+     vcenter_folder:
+        validate_certs: "{{ vcenter_validate_certs}}"
+        hostname: "{{ vcenter_hostname }}"
+        username: "{{ vcenter_username }}"
+        password: "{{ vcenter_password }}"
+        datacenter: "{{ vcenter_datacenter }}"
+        port: "{{ vcenter_port }}"
+        folder_name: "Depas"
+        folder_type: vm
+        state: present
+     register: "folder"
+
+   - name: Display variable
+     debug:
+       msg: "{{folder}}"
+     when: true
+
+   - name: Gather vmware host facts from vCenter
+     vmware_host_facts:
+       validate_certs: "{{ vcenter_validate_certs}}"
+       hostname: "{{ vcenter_hostname }}"
+       username: "{{ vcenter_username }}"
+       password: "{{ vcenter_password }}"
+       esxi_hostname: "{{item}}"
+     register: hosts_facts
+     delegate_to: localhost
+     loop:
+       - esxi3.becode.org
+     when: true
+
+   - name: Deploying VM
+     vmware_guest: 
+       validate_certs: "{{ vcenter_validate_certs}}"
+       hostname: "{{ vcenter_hostname }}"
+       username: "{{ vcenter_username }}"
+       password: "{{ vcenter_password }}"
+       folder: "{{folder.result.path}}"
+       force: "yes"
+       datastore: "{{vm_sdt_datastore}}"
+       datacenter: "{{vcenter_datacenter}}"
+       name: "Depas-w2no4-clone"
+       state: present
+       esxi_hostname: "esxi3.becode.org"
+       template: "BeCentral/vm/Templates/template-debian-10"
+       disk:
+         - size_mb: "{{vm_sdt_disk_size}}"
+           type: thin
+           datastore: "{{vcenter_datastore}}"
+       hardware: 
+         memory_mb: "{{vm_sdt_mem_size}}"
+         num_cpus: "{{vm_sdt_cpu_num}}"
+         scsi: paravirtual
+         hotadd_cpu: true
+         hotremove_cpu: true
+         hotadd_memory: true
+         boot_firmware: "efi"
+       networks:
+       - name: "{{vm_sdt_network}}"
+         start_connected: true
+       wait_for_ip_address: true
+     delegate_to: localhost
+     register: deploy
+     when: true
+
+- name: Config
+  hosts: Depas-w2no4-clone
+  
+  vars_files:
+  - ["./vars.yml"]
+
+  tasks:
+
+  - name: Create New User
+    user:
+      name: "{{ username }}"
+      shell: /bin/bash
+      groups: sudo
+      append: yes
+      password: "{{ userpass | password_hash('sha512') }}"
+    become: yes
+
+  - name: Add user to the sudoers
+    copy:
+      dest: "/etc/sudoers.d/{{ username }}"
+      content: "{{ username }}  ALL=(ALL)  NOPASSWD: ALL"
+    become: yes
+
+  - name: Deploy SSH Key
+    authorized_key: 
+      user: "{{ username }}"
+      key: "{{ lookup('file', '/home/becode/Documents/Ansible/AnsiKey.pub') }}"
+      state: present
+    become: yes
+
+  - name: Wait for sudo
+    shell:  while sudo fuser /var/lib/dpkg/lock >/dev/null 2>&1; do sleep 5; done;
+    become: yes
+
+  - name: Update repository list and cache
+    apt: update_cache=yes cache_valid_time=3600
+    become: true
+    become_method: sudo
+    
+  - name: Upgrade all packages 
+    apt: upgrade=yes
+    become: true
+    become_method: sudo
+
+  - name: Install the latest versions of each component
+    apt:
+      name:
+        - nginx
+        - php-mysql
+        - htop
+        - python
+        - tree
+        - ack-grep
+        - httpie
+        - git-core
+        - gnupg
+        - python3-pip
+        - ufw
+       
+      state: latest
+    become: true
+    become_method: sudo
+
+  - name: Start nginx
+    service:
+      name: nginx
+      state: started
+
+  - name: Test Nginx 
+    shell: service nginx status
+    register: nginx_output
+    become: true
+
+  - name: Show output of nginx status
+    debug: #use debug module
+      msg: "Container Output: {{nginx_output.stdout}}"
+
+  - name: Copy the nginx config file and restart nginx
+    copy:
+      src: ./static_site.cfg
+      dest: /etc/nginx/sites-available/static_site.cfg
+    become: yes
+
+  - name: Create symlink
+    file:
+      src: /etc/nginx/sites-available/static_site.cfg
+      dest: /etc/nginx/sites-enabled/default
+      state: link
+    become: yes
+
+  - name: Copy the content of the web site
+    copy:
+      src: ./site/
+      dest: /home/ToTo/site
+    become: yes
+    become_method: sudo
+
+  - name: Restart nginx
+    service:
+      name: nginx
+      state: restarted
+    become: yes
+
+  - name: Allow all access to tcp port 80
+    ufw:
+      rule: allow
+      port: '80'
+      proto: tcp
+    become: yes
+    become_method: sudo
+
+  - name: Install deps
+    apt: name={{ item }} state=present
+    with_items:
+      - apt-transport-https
+      - ca-certificates
+      - python-setuptools
+
+    become: true
+    become_method: sudo
+
+  - name: Install docker GPG key
+    raw: curl -fsSL https://download.docker.com/linux/ubuntu/gpg | sudo apt-key add -
+    become: true
+    become_method: sudo
+
+  - name: Add docker apt repository
+    apt_repository: repo="deb [arch=amd64] https://download.docker.com/linux/ubuntu focal stable"
+    become: true
+    become_method: sudo
+
+  - name: Update apt-cache
+    apt: update_cache=yes
+    become: true
+    become_method: sudo
+
+  - name: Purge the old repo if it exists
+    apt: name={{ item }} purge=yes
+    with_items:
+      - "docker.io*"
+    ignore_errors: yes
+    become: true
+    become_method: sudo
+
+  - name: Installing docker compose
+    pip:
+      name: docker-compose
+      version: "1.9"
+      state: present
+    become: true
+    become_method: sudo
+
+  - name: Test Docker with hello world example
+    shell: docker run hello-world
+    register: hello_world_output
+    become: true
+
+  - name: Show output of hello word example
+    debug: #use debug module
+      msg: "Container Output: {{hello_world_output.stdout}}"
+
+
+# Clone template
+- name: clone a template across VC
+  community.vmware.vmware_guest_cross_vc_clone:
+    hostname: '{{ vcenter_hostname }}'
+    username: '{{ vcenter_username }}'
+    password: '{{ vcenter_password }}'
+    name: "test_vm1"
+    destination_vm_name: "cloned_vm_from_template"
+    destination_vcenter: '{{ destination_vcenter_hostname }}'
+    destination_vcenter_username: '{{ destination_vcenter_username }}'
+    destination_vcenter_password: '{{ destination_vcenter_password }}'
+    destination_vcenter_port: '{{ destination_vcenter_port }}'
+    destination_vcenter_validate_certs: '{{ destination_vcenter_validate_certs }}'
+    destination_host: '{{ destination_esxi }}'
+    destination_datastore: '{{ destination_datastore }}'
+    destination_vm_folder: '{{ destination_vm_folder }}'
+    state: present
+  register: cross_vc_clone_from_template
+
+- name: clone a VM across VC
+  community.vmware.vmware_guest_cross_vc_clone:
+    hostname: '{{ vcenter_hostname }}'
+    username: '{{ vcenter_username }}'
+    password: "{{ vcenter_password }}"
+    name: "test_vm1"
+    destination_vm_name: "cloned_vm_from_vm"
+    destination_vcenter: '{{ destination_vcenter_hostname }}'
+    destination_vcenter_username: '{{ destination_vcenter_username }}'
+    destination_vcenter_password: '{{ destination_vcenter_password }}'
+    destination_host: '{{ destination_esxi }}'
+    destination_datastore: '{{ destination_datastore }}'
+    destination_vm_folder: '{{ destination_vm_folder }}'
+    state: poweredon
+  register: cross_vc_clone_from_vm
+
+- name: check_mode support
+  community.vmware.vmware_guest_cross_vc_clone:
+    hostname: '{{ vcenter_hostname }}'
+    username: '{{ vcenter_username }}'
+    password: "{{ vcenter_password }}"
+    name: "test_vm1"
+    destination_vm_name: "cloned_vm_from_vm"
+    destination_vcenter: '{{ destination_vcenter_hostname }}'
+    destination_vcenter_username: '{{ destination_vcenter_username }}'
+    destination_vcenter_password: '{{ destination_vcenter_password }}'
+    destination_host: '{{ destination_esxi }}'
+    destination_datastore: '{{ destination_datastore }}'
+    destination_vm_folder: '{{ destination_vm_folder }}'
+  check_mode: true

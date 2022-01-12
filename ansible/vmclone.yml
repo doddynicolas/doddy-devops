@@ -1,0 +1,51 @@
+---
+- name: vCenter VM Clone
+  hosts: localhost
+  vars:
+    vcenter_provider:
+      hostname: 192.168.1.1
+      username: administrator
+      password: password
+      validate_certs: no
+      datacenter: Datacenter
+      cluster: lab
+      folder: /Datacenter/vm
+
+    source_vm:
+      name: 'redhat-base'
+      network_name: 'VM Network'
+
+    new_hosts:
+      - hostname: testVM01
+        ip_addr: 192.168.1.101
+        ip_netmask: 255.255.255.0
+        ip_gateway: 192.168.1.1
+
+  tasks:
+    - name: Create VM from Template
+      vmware_guest:
+        hostname: "{{ vcenter_provider.hostname }}"
+        username: "{{ vcenter_provider.username }}"
+        password: "{{ vcenter_provider.password }}"
+        datacenter: "{{ vcenter_provider.datacenter }}"
+        cluster: "{{ vcenter_provider.cluster }}"
+        validate_certs: "{{ vcenter_provider.validate_certs }}"
+        folder: "{{( vcenter_provider.folder | default ('/vm') )}}"
+        name: "{{ item.hostname }}"
+        state: "{{ item.state | default('poweredon') }}"
+        template: "{{ source_vm.name }}"
+        networks:
+          - name: "{{ source_vm.network_name }}"
+		    type: static
+            ip: "{{ item.ip_addr }}"
+            netmask: "{{ item.ip_netmask }}"
+            gateway: "{{ item.ip_gateway }}"
+        customization:
+          hostname: "{{ item.hostname }}"
+        annotation: "Created via Ansible Script"
+      with_items: "{{ new_hosts }}"
+      register: deploy
+
+    - name: Show Deploy
+      debug:
+        msg: "{{ deploy }}"

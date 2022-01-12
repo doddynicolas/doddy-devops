@@ -1,0 +1,98 @@
+- name: Instant Clone a VM
+  community.vmware.vmware_guest_instant_clone:
+    hostname: "{{ vcenter_hostname }}"
+    username: "{{ vcenter_username }}"
+    password: "{{ vcenter_password }}"
+    validate_certs: False
+    folder: "{{ f0 }}"
+    datastore: "{{ rw_datastore }}"
+    datacenter: "{{ dc1 }}"
+    host: "{{ esxi1 }}"
+    name: "{{ Clone_vm }}"
+    parent_vm: "{{ testvm_1 }}"
+    resource_pool: "{{ test_resource_001 }}"
+  register: vm_clone
+  delegate_to: localhost
+
+- name: set state to poweroff the Cloned VM
+  community.vmware.vmware_guest_powerstate:
+    validate_certs: false
+    hostname: "{{ vcenter_hostname }}"
+    username: "{{ vcenter_username }}"
+    password: "{{ vcenter_password }}"
+    name: "cloned_vm_from_vm_cluster"
+    folder: "{{ f0 }}"
+    state: powered-off
+  register: poweroff_instant_clone_from_vm_when_cluster
+  delegate_to: localhost
+
+- name: Clean VM
+  community.vmware.vmware_guest:
+    validate_certs: false
+    hostname: "{{ vcenter_hostname }}"
+    username: "{{ vcenter_username }}"
+    password: "{{ vcenter_password }}"
+    name: "cloned_vm_from_vm_cluster"
+    datacenter: "{{ dc1 }}"
+    state: absent
+  register: delete_instant_clone_from_vm_when_cluster
+  ignore_errors: true
+  delegate_to: localhost
+
+- name: Instant Clone a VM with guest_customization
+  community.vmware.vmware_guest_instant_clone:
+    hostname: "{{ vcenter_hostname }}"
+    username: "{{ vcenter_username }}"
+    password: "{{ vcenter_password }}"
+    vm_username: "root"
+    vm_password: "SuperSecret"
+    validate_certs: False
+    folder: "{{ f0 }}"
+    datastore: "{{ rw_datastore }}"
+    datacenter: "{{ dc1 }}"
+    host: "{{ esxi1 }}"
+    guestinfo_vars:
+      - hostname: "{{ guestinfo.ic.hostname }}"
+        ipaddress: "{{ guestinfo.ic.ipaddress }}"
+        netmask: "{{ guestinfo.ic.netmask }}"
+        gateway: "{{ guestinfo.ic.gateway }}"
+        dns: "{{ guestinfo.ic.dns }}"
+        domain: "{{ guestinfo.ic.domain }}"
+    name: "Instant_clone_guest_customize"
+    parent_vm: "test_vm1"
+    resource_pool: DC0_C0_RP1
+  register: Instant_cloned_guest_customize
+  delegate_to: localhost
+
+- name: Instant Clone a VM when skipping optional params
+  community.vmware.vmware_guest_instant_clone:
+    hostname: "{{ vcenter_hostname }}"
+    username: "{{ vcenter_username }}"
+    password: "{{ vcenter_password }}"
+    validate_certs: False
+    name: "{{ Clone_vm }}"
+    parent_vm: "{{ testvm_1 }}"
+    datacenter: "{{ dc1 }}"
+    datastore: "{{ rw_datastore }}"
+    host: "{{ esxi1 }}"
+  register: VM_clone_optional_arguments
+  delegate_to: localhost
+
+- name: Instant clone in check mode
+  community.vmware.vmware_guest_instant_clone:
+    hostname: "{{ vcenter_hostname }}"
+    username: "{{ vcenter_username }}"
+    password: "{{ vcenter_password }}"
+    validate_certs: False
+    folder: "{{ f0 }}"
+    datastore: "{{ rw_datastore }}"
+    datacenter: "{{ dc1 }}"
+    host: "{{ esx1 }}"
+    name: "{{ Clone_vm }}"
+    parent_vm: "{{ testvm_2 }}"
+    resource_pool: "{{ test_resource_001 }}"
+  check_mode: true
+  register: check_mode_clone
+  delegate_to: localhost
+- debug:
+    var: check_mode_clone
